@@ -57,11 +57,7 @@ abstract class PBWritable {
    * @param password (optional) if provided, will try to login using this password
    * @returns returns if pocketbase was  correctly created. If credentials are provided, it also returns if login was succesful
    */
-  static async connect(
-    pocketBaseUrl: string,
-    username?: string,
-    password?: string
-  ) {
+  static connect(pocketBaseUrl: string) {
     this.baseUrl = pocketBaseUrl;
 
     try {
@@ -71,18 +67,19 @@ abstract class PBWritable {
       return false;
     }
 
-    if (username && password) {
-      try {
-        await this.pb.collection("users").authWithPassword(username, password);
-
-        return this.pb.authStore.isValid;
-      } catch {
-        console.error(ERROR_AUTH);
-        return false;
-      }
-    }
-
     return true;
+  }
+
+  static async login(username: string, password: string) {
+    try {
+      if (!this.pb) throw new Error(ERROR_INIT);
+      this.pb.collection("users").authWithPassword(username, password);
+
+      return this.pb.authStore.isValid;
+    } catch {
+      console.error(ERROR_AUTH);
+      return false;
+    }
   }
 
   static async disconnect(collectionName: string, id: string = "*") {
@@ -105,7 +102,7 @@ abstract class PBWritable {
    * @param transform (optional) transform that is called everytime a new element is set in the store
    * @returns [Svelte store, update method]
    */
-  static async create<T>(
+  static create<T>(
     collectionName: string,
     id: string,
     transform?: Transform<T>
@@ -125,9 +122,13 @@ abstract class PBWritable {
         return false;
       }
     };
-
-    const initialRecord = await collection.getOne(id);
-    const store = writable<T>(cast<T>(initialRecord, transform));
+    collection.getOne(id).then((record) => {
+      if (record) {
+        store.set(cast<T>(record, transform));
+      }
+    });
+    const defaultValue: RecordModel = {} as RecordModel;
+    const store = writable<T>(cast<T>(defaultValue, transform));
 
     collection.unsubscribe(id);
     collection.subscribe(id, async () => {
@@ -148,7 +149,7 @@ abstract class PBWritable {
    * @param transform (optional) transform that is called everytime a new element is set in the store
    * @returns [Svelte store, update method, create method, remove method]
    */
-  static async createList<T extends any[]>(
+  static createList<T extends any[]>(
     collectionName: string,
     options?: RecordListOptions & { page?: number; perPage?: number },
     transform?: ListTransform<T>
@@ -197,10 +198,16 @@ abstract class PBWritable {
     const perPage = options?.perPage ?? -1;
     const getAll = page === -1 || perPage === -1;
 
-    const list = getAll
-      ? await collection.getFullList(options)
-      : (await collection.getList(page, perPage, options)).items;
-    const store = writable<T>(castList<T>(list, transform));
+    if (getAll) {
+      collection.getFullList(options).then((value) => {
+        store.set(value as T);
+      });
+    } else {
+      collection.getList(page, perPage, options).then((value) => {
+        store.set(value.items as T);
+      });
+    }
+    const store = writable<T>(castList<T>([], transform));
 
     collection.unsubscribe("*");
     collection.subscribe("*", async () => {
